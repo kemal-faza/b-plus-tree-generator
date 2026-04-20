@@ -168,9 +168,105 @@
 				return out;
 			};
 
+			serializeTreeNode = function (ptr) {
+				if (ptr === null) return null;
+				if (ptr.isLeaf()) {
+					return {
+						kind: 'leaf',
+						keyval: ptr.keyval.slice(0),
+						recnum: ptr.recnum.slice(0),
+					};
+				}
+				var kids = [];
+				for (var i = 0, len = ptr.nodptr.length; i < len; i++) {
+					kids.push(serializeTreeNode(ptr.nodptr[i]));
+				}
+				return {
+					kind: 'node',
+					keyval: ptr.keyval.slice(0),
+					nodptr: kids,
+				};
+			};
+
+			deserializeTreeNode = function (obj, leaves) {
+				if (typeof obj !== 'object' || obj === null) {
+					throw new Error('Invalid node snapshot.');
+				}
+				if (obj.kind === 'leaf') {
+					if (
+						!Array.isArray(obj.keyval) ||
+						!Array.isArray(obj.recnum)
+					) {
+						throw new Error('Invalid leaf snapshot.');
+					}
+					if (obj.keyval.length !== obj.recnum.length) {
+						throw new Error('Leaf snapshot length mismatch.');
+					}
+					var lf = new leaf();
+					lf.keyval = obj.keyval.slice(0);
+					lf.recnum = obj.recnum.slice(0);
+					leaves.push(lf);
+					return lf;
+				}
+				if (obj.kind === 'node') {
+					if (
+						!Array.isArray(obj.keyval) ||
+						!Array.isArray(obj.nodptr)
+					) {
+						throw new Error('Invalid internal node snapshot.');
+					}
+					if (obj.nodptr.length !== obj.keyval.length + 1) {
+						throw new Error('Internal node pointer mismatch.');
+					}
+					var nd = new node();
+					nd.keyval = obj.keyval.slice(0);
+					for (var i = 0, len = obj.nodptr.length; i < len; i++) {
+						nd.nodptr.push(
+							deserializeTreeNode(obj.nodptr[i], leaves),
+						);
+					}
+					return nd;
+				}
+				throw new Error('Unknown snapshot node type.');
+			};
+
+			linkLeafChain = function (leaves) {
+				for (var i = 0, len = leaves.length; i < len; i++) {
+					leaves[i].prevLf = i === 0 ? null : leaves[i - 1];
+					leaves[i].nextLf = i === len - 1 ? null : leaves[i + 1];
+				}
+			};
+
+			restoreTreeFromStructure = function (data) {
+				if (
+					typeof data.structure !== 'object' ||
+					data.structure === null
+				) {
+					throw new Error('Invalid or missing "structure" snapshot.');
+				}
+				var loadedTree = new tree(data.order);
+				var leaves = [];
+				loadedTree.root = deserializeTreeNode(data.structure, leaves);
+				linkLeafChain(leaves);
+				loadedTree.length = 0;
+				for (var i = 0, len = leaves.length; i < len; i++) {
+					loadedTree.length += leaves[i].keyval.length;
+				}
+				loadedTree.leaf = null;
+				loadedTree.item = -1;
+				loadedTree.keyval = '';
+				loadedTree.recnum = -1;
+				loadedTree.found = false;
+				loadedTree.eof = true;
+				if (loadedTree.length > 0) loadedTree.goTop();
+				return loadedTree;
+			};
+
 			buildTreePayload = function (tr) {
 				return {
+					format: 'bptree-v2',
 					order: tr.maxkey + 1,
+					structure: serializeTreeNode(tr.root),
 					pairs: getTreePairs(tr),
 				};
 			};
@@ -305,22 +401,32 @@
 				if (typeof data.order !== 'number' || data.order < 3) {
 					throw new Error('Invalid or missing "order" value.');
 				}
-				if (!Array.isArray(data.pairs)) {
-					throw new Error('Invalid or missing "pairs" list.');
-				}
 
-				var loadedTree = new tree(data.order);
+				var loadedTree;
 				var inserted = 0;
-				for (var i = 0, len = data.pairs.length; i < len; i++) {
-					var pair = data.pairs[i];
-					if (
-						typeof pair !== 'object' ||
-						pair === null ||
-						typeof pair.key === 'undefined'
-					) {
-						throw new Error('Invalid pair at index ' + i + '.');
+				if (
+					typeof data.structure === 'object' &&
+					data.structure !== null
+				) {
+					loadedTree = restoreTreeFromStructure(data);
+					inserted = loadedTree.length;
+				} else {
+					if (!Array.isArray(data.pairs)) {
+						throw new Error('Invalid or missing "pairs" list.');
 					}
-					if (loadedTree.insert(pair.key, pair.recnum)) inserted++;
+					loadedTree = new tree(data.order);
+					for (var i = 0, len = data.pairs.length; i < len; i++) {
+						var pair = data.pairs[i];
+						if (
+							typeof pair !== 'object' ||
+							pair === null ||
+							typeof pair.key === 'undefined'
+						) {
+							throw new Error('Invalid pair at index ' + i + '.');
+						}
+						if (loadedTree.insert(pair.key, pair.recnum))
+							inserted++;
+					}
 				}
 
 				myTree = loadedTree;
@@ -329,15 +435,20 @@
 				hist[0] = 'myTree = new tree(' + data.order + ');';
 				hist.push('// ' + inserted + ' keys loaded from file');
 
-				var txt =
-					'Tree loaded from file. ' +
-					commas(inserted) +
-					' unique keys added.';
-				if (inserted !== data.pairs.length) {
-					txt +=
-						' (' +
-						commas(data.pairs.length - inserted) +
-						' duplicate keys skipped.)';
+				var txt;
+				if (
+					typeof data.structure === 'object' &&
+					data.structure !== null
+				) {
+					txt =
+						'Tree loaded from file. ' +
+						commas(inserted) +
+						' keys restored with original structure.';
+				} else {
+					txt =
+						'Tree loaded from file. ' +
+						commas(inserted) +
+						' keys loaded from legacy pair format.';
 				}
 				ge$('toMsg').innerHTML =
 					txt + '<br><br>\r\n' + myTree.show('toCanvas');

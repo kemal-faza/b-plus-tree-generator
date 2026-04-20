@@ -111,23 +111,17 @@ leaf.prototype.addKey = function (key, rec) {
 	var vals = this.keyval;
 	var itm = vals.length;
 	for (var i = 0, len = itm; i < len; i++) {
-		if (key === vals[i]) {
-			itm = -1;
-			break;
-		}
-		if (key <= vals[i]) {
+		if (key < vals[i]) {
 			itm = i;
 			break;
 		}
 	}
-	if (itm != -1) {
-		for (var i = vals.length; i > itm; i--) {
-			vals[i] = vals[i - 1];
-			this.recnum[i] = this.recnum[i - 1];
-		}
-		vals[itm] = key;
-		this.recnum[itm] = rec;
+	for (var i = vals.length; i > itm; i--) {
+		vals[i] = vals[i - 1];
+		this.recnum[i] = this.recnum[i - 1];
 	}
+	vals[itm] = key;
+	this.recnum[itm] = rec;
 	return itm;
 };
 
@@ -185,7 +179,7 @@ node.prototype.addKey = function (key, ptrL, ptrR) {
 	var vals = this.keyval;
 	var itm = vals.length;
 	for (var i = 0, len = vals.length; i < len; i++) {
-		if (key <= vals[i]) {
+		if (key < vals[i]) {
 			itm = i;
 			break;
 		}
@@ -242,13 +236,6 @@ tree.prototype.insert = function (key, rec) {
 	}
 	this.keyval = key;
 	this.eof = false;
-
-	this.item = this.leaf.getItem(key, false);
-	if (this.item !== -1) {
-		this.found = true;
-		this.recnum = this.leaf.recnum[this.item];
-		return false;
-	}
 
 	this.found = false;
 	this.recnum = rec;
